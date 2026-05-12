@@ -1,7 +1,28 @@
 #include "uthreads.h"
-
 #include <iostream>
+#include <queue>
+#include <map>
 
+#define MAX_THREAD_NUM 100
+#define STACK_SIZE 4096
+
+using namespace std;
+
+enum State {
+    RUNNING,
+    READY,
+    BLOCKED
+};
+typedef struct {
+    int TID;
+    State state;
+    int quantom;
+    void* stack;
+} thread;
+
+thread* threads[MAX_THREAD_NUM] = {nullptr};
+queue<int> threads_queue;
+int current_thread = -1;
 
 /**
  * @brief initializes the thread library.
@@ -16,8 +37,15 @@
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_init(int quantum_usecs) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    if (quantum_usecs < 1) {
+        std::cerr << "thread library error: " << "quantum must be positive integer" << std::endl;
+        return -1;
+    }
+    thread main = {0, RUNNING, quantum_usecs, nullptr};
+    threads[0] = &main;
+    current_thread = 0;
+    return 0;
+
 }
 
 /**
@@ -33,7 +61,18 @@ int uthread_init(int quantum_usecs) {
  * @return On success, return the ID of the created thread. On failure, return -1.
 */
 int uthread_spawn(thread_entry_point entry_point) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
+    if (entry_point == nullptr) {
+        std::cerr << "thread library error: " << "entry_point can't be NULL" << std::endl;
+    }
+    for (int i = 0; i < MAX_THREAD_NUM; i++) {
+        if (threads[i] == nullptr) {
+            void* stack = malloc(STACK_SIZE);
+            thread new_thread = {i, READY, 1, stack};
+            threads[i] = &new_thread;
+            return i;
+        }
+    }
+    std::cerr << "thread library error: " << "Over 100 threads" << std::endl;
     return -1;
 }
 
@@ -49,8 +88,13 @@ int uthread_spawn(thread_entry_point entry_point) {
  * itself or the main thread is terminated, the function does not return.
 */
 int uthread_terminate(int tid){
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    if (threads[tid] == nullptr) {
+        std::cerr << "thread library error: " << "tid " << tid << " is not exist" << std::endl;
+        return -1;
+    }
+    free(threads[tid]->stack);
+    threads[tid] = nullptr;
+    return 0;
 }
 
 
@@ -111,8 +155,7 @@ int uthread_sleep(int num_quantums) {
  * @return The ID of the calling thread.
 */
 int uthread_get_tid() {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    return current_thread;
 }
 
 
