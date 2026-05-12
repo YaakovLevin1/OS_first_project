@@ -81,6 +81,33 @@ int quantum_counter = 0;
 int g_quantom_usecs = 0;
 
 
+// blocks a timer signal (SIGVTALRM signal)
+void block_timer_signal() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGVTALRM);
+
+    if (sigprocmask(SIG_BLOCK, &set, NULL) < 0) {
+
+        std::cerr << "system error: sigprocmask failed" << std::endl;
+
+        exit(1);
+
+    }
+}
+
+
+// unblocks the SIGVTALRM signal.
+void unblock_timer_signal() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGVTALRM);
+    if (sigprocmask(SIG_UNBLOCK, &set, NULL) < 0) {
+        std::cerr << "system error: sigprocmask failed" << std::endl;
+        exit(1);
+    }
+}
+
 void reset_timer(int quantum_usecs) {
     struct itimerval timer;
     timer.it_value.tv_sec = quantum_usecs / 1000000;
@@ -99,9 +126,13 @@ void reset_timer(int quantum_usecs) {
 
 
 int context_switch() {
+    block_timer_signal();
+
     // save current state
     if (threads[current_thread] != nullptr) {
+        unblock_timer_signal();
         int result = sigsetjmp(threads[current_thread]->env,1);
+        block_timer_signal();
         if (result != 0) {
             return 0;
         }
@@ -141,6 +172,7 @@ int context_switch() {
     threads[current_thread]->state = RUNNING;
     threads[current_thread]->quantum++;
     quantum_counter++;
+    unblock_timer_signal();
     siglongjmp(threads[current_thread]->env,1);
 }
 
@@ -152,34 +184,6 @@ void timer_handler(int sig)
 }
 
 
-
-// blocks a timer signal (SIGVTALRM signal)
-void block_timer_signal() {
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGVTALRM);
-
-    if (sigprocmask(SIG_BLOCK, &set, NULL) < 0) {
-
-        std::cerr << "system error: sigprocmask failed" << std::endl;
-
-        exit(1);
-
-    }
-}
-
-
-// unblocks the SIGVTALRM signal.
-
-void unblock_timer_signal() {
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGVTALRM);
-    if (sigprocmask(SIG_UNBLOCK, &set, NULL) < 0) {
-        std::cerr << "system error: sigprocmask failed" << std::endl;
-        exit(1);
-    }
-}
 
 
 /**
@@ -459,7 +463,10 @@ int uthread_sleep(int num_quantums) {
  * @return The ID of the calling thread.
 */
 int uthread_get_tid() {
-    return current_thread;
+    block_timer_signal();
+    int res = current_thread;
+    unblock_timer_signal();
+    return res;
 }
 
 
@@ -472,7 +479,10 @@ int uthread_get_tid() {
  * @return The total number of quantums.
 */
 int uthread_get_total_quantums() {
-    return quantum_counter;
+    block_timer_signal();
+    int res = quantum_counter;
+    unblock_timer_signal();
+    return res;
 }
 
 
@@ -486,13 +496,18 @@ int uthread_get_total_quantums() {
  * @return On success, return the number of quantums of the thread with ID tid. On failure, return -1.
 */
 int uthread_get_quantums(int tid) {
+    block_timer_signal();
     if (tid < 0 || tid >= MAX_THREAD_NUM) {
         std::cerr << "thread library error: " << "tid must be positive" << std::endl;
+        unblock_timer_signal();
         return -1;
     }
     if (threads[tid] == nullptr) {
         std::cerr << "thread library error: " << "tid " << tid << " is not exist" << std::endl;
+        unblock_timer_signal();
         return -1;
     }
-    return threads[tid]->quantum;
+    int res =  threads[tid]->quantum;
+    unblock_timer_signal();
+    return res;
 }
