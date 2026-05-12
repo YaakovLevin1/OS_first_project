@@ -20,8 +20,9 @@ typedef struct {
     int TID;
     State state;
     int quantum;
-    sigjmp_buf env;
+    char* stack;
     void (*func)(void);
+    sigjmp_buf env;
 } thread;
 
 thread* threads[MAX_THREAD_NUM] = {nullptr};
@@ -30,16 +31,27 @@ int current_thread = -1;
 int quantum_counter = 0;
 
 int context_switch() {
+    int result = sigsetjmp(threads[current_thread]->env,1);
+    if (result != 0) {
+        return -1;
+    }
+    if (ready_queue.empty()) {
+        return -1;
+    }
     int next_thread = ready_queue.front();
+    while (threads[next_thread] == nullptr) {
+        ready_queue.pop();
+        next_thread = ready_queue.front();
+    }
     ready_queue.pop();
     current_thread = next_thread;
     threads[current_thread]->state = RUNNING;
     threads[current_thread]->quantum++;
     quantum_counter++;
-    return next_thread;
+    siglongjmp(threads[current_thread]->env,1);
 }
 
-/**
+/**SS
  * @brief initializes the thread library.
  *
  * Once this function returns, the main thread (tid == 0) will be set as RUNNING. There is no need to 
@@ -122,8 +134,10 @@ int uthread_terminate(int tid){
         return -1;
     }
     if (current_thread == tid) {
-        std::cerr << "thread library error: " << "can't delete current thread" << std::endl;
-        return -1;
+        delete[] threads[tid]->stack;
+        delete threads[tid];
+        threads[tid] = nullptr;
+        context_switch();
     }
 
     delete[] threads[tid]->stack;
