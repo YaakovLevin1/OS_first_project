@@ -6,6 +6,58 @@
 #include <signal.h>
 
 
+
+#include <stdio.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <stdbool.h>
+
+
+#ifdef __x86_64__
+/* code for 64 bit Intel arch */
+
+typedef unsigned long address_t;
+#define JB_SP 6
+#define JB_PC 7
+
+/* A translation is required when using an address of a variable.
+   Use this as a black box in your code. */
+address_t translate_address(address_t addr)
+{
+    address_t ret;
+    asm volatile("xor    %%fs:0x30,%0\n"
+        "rol    $0x11,%0\n"
+                 : "=g" (ret)
+                 : "0" (addr));
+    return ret;
+}
+
+#else
+/* code for 32 bit Intel arch */
+
+typedef unsigned int address_t;
+#define JB_SP 4
+#define JB_PC 5
+
+
+/* A translation is required when using an address of a variable.
+   Use this as a black box in your code. */
+address_t translate_address(address_t addr)
+{
+    address_t ret;
+    asm volatile("xor    %%gs:0x18,%0\n"
+                 "rol    $0x9,%0\n"
+    : "=g" (ret)
+    : "0" (addr));
+    return ret;
+}
+
+
+#endif
+
+
 #define MAX_THREAD_NUM 100
 #define STACK_SIZE 4096
 
@@ -17,7 +69,6 @@ enum State {
     BLOCKED
 };
 typedef struct {
-    int TID;
     State state;
     int quantum;
     char* stack;
@@ -29,11 +80,14 @@ thread* threads[MAX_THREAD_NUM] = {nullptr};
 queue<int> ready_queue;
 int current_thread = -1;
 int quantum_counter = 0;
+int g_quantom_usecs = 0;
 
 int context_switch() {
-    int result = sigsetjmp(threads[current_thread]->env,1);
-    if (result != 0) {
-        return -1;
+    if (threads[current_thread] != nullptr) {
+        int result = sigsetjmp(threads[current_thread]->env,1);
+        if (result != 0) {
+            return 0;
+        }
     }
     if (ready_queue.empty()) {
         return -1;
@@ -41,6 +95,9 @@ int context_switch() {
     int next_thread = ready_queue.front();
     while (threads[next_thread] == nullptr) {
         ready_queue.pop();
+        if (ready_queue.empty()) {
+            return -1;
+        }
         next_thread = ready_queue.front();
     }
     ready_queue.pop();
@@ -68,7 +125,8 @@ int uthread_init(int quantum_usecs) {
         std::cerr << "thread library error: " << "quantum must be positive integer" << std::endl;
         return -1;
     }
-    thread* main = new thread{0, RUNNING, quantum_usecs, nullptr};
+    g_quantom_usecs = quantum_usecs;
+    thread* main = new thread{RUNNING, 1, nullptr};
     threads[0] = main;
     current_thread = 0;
     quantum_counter++;
@@ -95,7 +153,12 @@ int uthread_spawn(thread_entry_point entry_point) {
     for (int i = 0; i < MAX_THREAD_NUM; i++) {
         if (threads[i] == nullptr) {
             char* stack = new char[STACK_SIZE];
-            threads[i] = new thread{i, READY, 0, stack,entry_point};
+            threads[i] = new thread{READY, 0, stack,entry_point};
+            sigsetjmp(threads[i]->env, 1);
+            address_t sp = (address_t)stack + STACK_SIZE - sizeof(address_t);
+            address_t pc = (address_t)entry_point;
+            (threads[i]->env->__jmpbuf)[JB_SP] = translate_address(sp);
+            (threads[i]->env->__jmpbuf)[JB_PC] = translate_address(pc);
             ready_queue.push(i);
             return i;
         }
@@ -133,16 +196,15 @@ int uthread_terminate(int tid){
         std::cerr << "thread library error: " << "tid " << tid << " is not exist" << std::endl;
         return -1;
     }
-    if (current_thread == tid) {
-        delete[] threads[tid]->stack;
-        delete threads[tid];
-        threads[tid] = nullptr;
-        context_switch();
-    }
 
     delete[] threads[tid]->stack;
     delete threads[tid];
     threads[tid] = nullptr;
+
+    if (current_thread == tid) {
+        context_switch();
+    }
+
     return 0;
 }
 
@@ -195,10 +257,13 @@ int uthread_resume(int tid) {
 int uthread_sleep(int num_quantums) {
     if (current_thread == 0 && num_quantums != 0) {
         std::cerr << "thread library error: " << "main thread can't sleep" << std::endl;
+        return -1;
     }
     if (num_quantums == 0) {
         threads[current_thread]->state = READY;
+        ready_queue.push(current_thread);
         context_switch();
+        return 0;
     }
 
     return -1;

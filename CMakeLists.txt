@@ -9,5 +9,5 @@ include_directories(.)
 
 add_executable(program
         uthreads.cpp
-        tests/test_2_thread_id_management.cpp
+        tests/test_3_self_preemption.cpp
 )
