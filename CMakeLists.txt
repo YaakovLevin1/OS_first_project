@@ -9,5 +9,5 @@ include_directories(.)
 
 add_executable(program
         uthreads.cpp
-        tests/test_5.cpp
+        tests/test2.cpp
 )

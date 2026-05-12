@@ -17,8 +17,7 @@ typedef unsigned long address_t;
 #define JB_SP 6
 #define JB_PC 7
 
-/* A translation is required when using an address of a variable.
-   Use this as a black box in your code. */
+
 address_t translate_address(address_t addr)
 {
     address_t ret;
@@ -37,8 +36,6 @@ typedef unsigned int address_t;
 #define JB_PC 5
 
 
-/* A translation is required when using an address of a variable.
-   Use this as a black box in your code. */
 address_t translate_address(address_t addr)
 {
     address_t ret;
@@ -53,8 +50,6 @@ address_t translate_address(address_t addr)
 #endif
 
 
-#define MAX_THREAD_NUM 100
-#define STACK_SIZE 4096
 
 using namespace std;
 
@@ -80,6 +75,15 @@ int current_thread = -1;
 int quantum_counter = 0;
 int g_quantom_usecs = 0;
 
+// handle self deletion
+int zombie_thread = -1;
+void clean_zombie() {
+    if (threads[zombie_thread] != nullptr) {
+        delete[] threads[zombie_thread]->stack;
+        delete threads[zombie_thread];
+        threads[zombie_thread] = nullptr;
+    }
+}
 
 // blocks a timer signal (SIGVTALRM signal)
 void block_timer_signal() {
@@ -178,6 +182,11 @@ int context_switch() {
 
 void timer_handler(int sig)
 {
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
+
     threads[current_thread]->state = READY;
     ready_queue.push(current_thread);
     context_switch();
@@ -220,7 +229,7 @@ int uthread_init(int quantum_usecs) {
 
     struct sigaction sa = {};
 
-    // Install timer_handler as the signal handler for SIGVTALRM.
+    // install timer_handler when the signal handler for SIGVTALRM.
     sa.sa_handler = &timer_handler;
     if (sigaction(SIGVTALRM, &sa, NULL) < 0)
     {
@@ -251,6 +260,10 @@ int uthread_init(int quantum_usecs) {
 int uthread_spawn(thread_entry_point entry_point) {
 
     block_timer_signal();
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
 
     if (entry_point == nullptr) {
         std::cerr << "thread library error: " << "entry_point can't be NULL" << std::endl;
@@ -305,12 +318,16 @@ int uthread_spawn(thread_entry_point entry_point) {
 int uthread_terminate(int tid){
 
     block_timer_signal();
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
 
     if (tid == 0) {
-        for (auto& thread : threads) {
-            if (thread != nullptr) {
-                delete[] thread->stack;
-                delete thread;
+        for (int i = 0; i < MAX_THREAD_NUM; i++) {
+            if (threads[i] != nullptr && i != current_thread) {
+                delete[] threads[i]->stack;
+                delete threads[i];
             }
         }
         exit(0);
@@ -326,14 +343,15 @@ int uthread_terminate(int tid){
         return -1;
     }
 
-    delete[] threads[tid]->stack;
-    delete threads[tid];
-    threads[tid] = nullptr;
-
     if (current_thread == tid) {
+        zombie_thread = current_thread;
         unblock_timer_signal();
         context_switch();
     }
+
+    delete[] threads[tid]->stack;
+    delete threads[tid];
+    threads[tid] = nullptr;
     unblock_timer_signal();
     return 0;
 }
@@ -350,6 +368,10 @@ int uthread_terminate(int tid){
 */
 int uthread_block(int tid) {
     block_timer_signal();
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
 
     if (tid <= 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
         std::cerr << "thread library error: Invalid tid in uthread_block\n" << std::endl;
@@ -366,8 +388,8 @@ int uthread_block(int tid) {
     t->is_actively_blocked = true;
 
     if (tid == current_thread) {
-        unblock_timer_signal();
         context_switch();
+        unblock_timer_signal();
     }
 
     unblock_timer_signal();
@@ -389,6 +411,10 @@ int uthread_block(int tid) {
 int uthread_resume(int tid) {
 
     block_timer_signal();
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
 
     if (tid < 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
         std::cerr << "thread library error: Invalid tid in uthread_resume\n" << std::endl;
@@ -430,6 +456,11 @@ int uthread_resume(int tid) {
 int uthread_sleep(int num_quantums) {
 
     block_timer_signal();
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
+
     if (num_quantums < 0) {
         std::cerr << "thread library error: " << "num_quantums can't be negative" << std::endl;
         unblock_timer_signal();
@@ -479,7 +510,13 @@ int uthread_get_tid() {
  * @return The total number of quantums.
 */
 int uthread_get_total_quantums() {
+
     block_timer_signal();
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
+
     int res = quantum_counter;
     unblock_timer_signal();
     return res;
@@ -497,6 +534,11 @@ int uthread_get_total_quantums() {
 */
 int uthread_get_quantums(int tid) {
     block_timer_signal();
+    if (zombie_thread != -1) {
+        clean_zombie();
+        zombie_thread = -1;
+    }
+
     if (tid < 0 || tid >= MAX_THREAD_NUM) {
         std::cerr << "thread library error: " << "tid must be positive" << std::endl;
         unblock_timer_signal();
