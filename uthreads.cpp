@@ -102,7 +102,7 @@ int context_switch() {
     for (int i = 0; i < MAX_THREAD_NUM; i++)  {
         if (threads[i] != nullptr && threads[i]->quantum_sleep > 0) {
             threads[i]->quantum_sleep--;
-            if (threads[i]->quantum_sleep == 0) {
+            if (threads[i]->quantum_sleep == 0 && threads[i]->is_actively_blocked == false) {
                 ready_queue.push(i);
                 threads[i]->state = READY;
             }
@@ -128,7 +128,8 @@ int context_switch() {
     siglongjmp(threads[current_thread]->env,1);
 }
 
-/**SS
+
+/**
  * @brief initializes the thread library.
  *
  * Once this function returns, the main thread (tid == 0) will be set as RUNNING. There is no need to 
@@ -239,9 +240,27 @@ int uthread_terminate(int tid){
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_block(int tid) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    if (tid <= 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
+        std::cerr << "thread library error: Invalid tid in uthread_block\n" << std::endl;
+        return -1;
+    }
+
+    thread *t = threads[tid];
+    if (t->is_actively_blocked) {
+        return 0;
+    }
+
+    t->state = BLOCKED;
+    t->is_actively_blocked = true;
+
+    if (tid == current_thread) {
+        context_switch();
+    }
+
+
+    return 0;
 }
+
 
 
 /**
@@ -254,9 +273,23 @@ int uthread_block(int tid) {
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_resume(int tid) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    if (tid < 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
+        std::cerr << "thread library error: Invalid tid in uthread_resume\n" << std::endl;
+        return -1;
+    }
+    thread *t = threads[tid];
+    if (t->state == RUNNING || t->state == READY) {
+        return 0;
+    }
+    t->is_actively_blocked = false;
+    if (threads[tid]->state == BLOCKED && threads[tid]->quantum_sleep == 0) {
+        threads[tid]->state = READY;
+        ready_queue.push(tid);
+    }
+
+    return 0;
 }
+
 
 
 /**
