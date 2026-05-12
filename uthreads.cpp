@@ -424,7 +424,13 @@ int uthread_resume(int tid) {
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_sleep(int num_quantums) {
+
     block_timer_signal();
+    if (num_quantums < 0) {
+        std::cerr << "thread library error: " << "num_quantums can't be negative" << std::endl;
+        unblock_timer_signal();
+        return -1;
+    }
 
     if (current_thread == 0 && num_quantums != 0) {
         std::cerr << "thread library error: " << "main thread can't sleep" << std::endl;
