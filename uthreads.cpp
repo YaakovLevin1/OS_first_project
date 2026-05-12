@@ -1,6 +1,8 @@
 #include "uthreads.h"
 #include <iostream>
 #include <queue>
+#include <unistd.h>
+#include <signal.h>
 #include <map>
 
 #define MAX_THREAD_NUM 100
@@ -17,7 +19,8 @@ typedef struct {
     int TID;
     State state;
     int quantom;
-    void* stack;
+    char* stack;
+    void (*func)(void);
 } thread;
 
 thread* threads[MAX_THREAD_NUM] = {nullptr};
@@ -41,8 +44,8 @@ int uthread_init(int quantum_usecs) {
         std::cerr << "thread library error: " << "quantum must be positive integer" << std::endl;
         return -1;
     }
-    thread main = {0, RUNNING, quantum_usecs, nullptr};
-    threads[0] = &main;
+    thread* main = new thread{0, RUNNING, quantum_usecs, nullptr};
+    threads[0] = main;
     current_thread = 0;
     return 0;
 
@@ -66,13 +69,12 @@ int uthread_spawn(thread_entry_point entry_point) {
     }
     for (int i = 0; i < MAX_THREAD_NUM; i++) {
         if (threads[i] == nullptr) {
-            void* stack = malloc(STACK_SIZE);
-            thread new_thread = {i, READY, 1, stack};
-            threads[i] = &new_thread;
+            char* stack = new char[STACK_SIZE];
+            threads[i] = new thread{i, READY, 1, stack,entry_point};
             return i;
         }
     }
-    std::cerr << "thread library error: " << "Over 100 threads" << std::endl;
+    // std::cerr << "thread library error: " << "Over 100 threads" << std::endl;
     return -1;
 }
 
@@ -88,11 +90,30 @@ int uthread_spawn(thread_entry_point entry_point) {
  * itself or the main thread is terminated, the function does not return.
 */
 int uthread_terminate(int tid){
+    if (tid == 0) {
+        for (auto& thread : threads) {
+            if (thread != nullptr) {
+                delete[] thread->stack;
+                delete thread;
+            }
+        }
+        exit(0);
+    }
+    if (tid < 0 || tid >= MAX_THREAD_NUM) {
+        std::cerr << "thread library error: " << "tid must be positive" << std::endl;
+        return -1;
+    }
     if (threads[tid] == nullptr) {
         std::cerr << "thread library error: " << "tid " << tid << " is not exist" << std::endl;
         return -1;
     }
-    free(threads[tid]->stack);
+    if (current_thread == tid) {
+        std::cerr << "thread library error: " << "can't delete current thread" << std::endl;
+        return -1;
+    }
+
+    delete[] threads[tid]->stack;
+    delete threads[tid];
     threads[tid] = nullptr;
     return 0;
 }
