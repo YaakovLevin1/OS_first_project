@@ -4,13 +4,8 @@
 #include <setjmp.h>
 #include <unistd.h>
 #include <signal.h>
-
-
-
+#include <new>
 #include <stdio.h>
-#include <setjmp.h>
-#include <signal.h>
-#include <unistd.h>
 #include <sys/time.h>
 #include <stdbool.h>
 
@@ -85,6 +80,24 @@ int current_thread = -1;
 int quantum_counter = 0;
 int g_quantom_usecs = 0;
 
+
+void reset_timer(int quantum_usecs) {
+    struct itimerval timer;
+    timer.it_value.tv_sec = quantum_usecs / 1000000;
+    timer.it_value.tv_usec = quantum_usecs % 1000000;
+
+    timer.it_interval.tv_sec = quantum_usecs / 1000000;
+    timer.it_interval.tv_usec = quantum_usecs % 1000000;
+
+    // Start a virtual timer. It counts down whenever this process is executing.
+    if (setitimer(ITIMER_VIRTUAL, &timer, NULL))
+    {
+        std::cerr << "system error: " << "timer set error" << std::endl;
+        exit(1);
+    }
+}
+
+
 int context_switch() {
     // save current state
     if (threads[current_thread] != nullptr) {
@@ -120,12 +133,52 @@ int context_switch() {
         next_thread = ready_queue.front();
     }
 
+    // before switch, reset the timer
+    reset_timer(g_quantom_usecs);
+
     ready_queue.pop();
     current_thread = next_thread;
     threads[current_thread]->state = RUNNING;
     threads[current_thread]->quantum++;
     quantum_counter++;
     siglongjmp(threads[current_thread]->env,1);
+}
+
+void timer_handler(int sig)
+{
+    threads[current_thread]->state = READY;
+    ready_queue.push(current_thread);
+    context_switch();
+}
+
+
+
+// blocks a timer signal (SIGVTALRM signal)
+void block_timer_signal() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGVTALRM);
+
+    if (sigprocmask(SIG_BLOCK, &set, NULL) < 0) {
+
+        std::cerr << "system error: sigprocmask failed" << std::endl;
+
+        exit(1);
+
+    }
+}
+
+
+// unblocks the SIGVTALRM signal.
+
+void unblock_timer_signal() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGVTALRM);
+    if (sigprocmask(SIG_UNBLOCK, &set, NULL) < 0) {
+        std::cerr << "system error: sigprocmask failed" << std::endl;
+        exit(1);
+    }
 }
 
 
@@ -142,15 +195,39 @@ int context_switch() {
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_init(int quantum_usecs) {
+
+    block_timer_signal();
+
     if (quantum_usecs < 1) {
         std::cerr << "thread library error: " << "quantum must be positive integer" << std::endl;
+        unblock_timer_signal();
         return -1;
     }
     g_quantom_usecs = quantum_usecs;
-    thread* main = new thread{RUNNING, 1, nullptr};
+    thread* main = new (nothrow) thread{RUNNING, 1, nullptr};
+    if (main == nullptr) {
+        std::cerr << "system error: " << "allocation failed" << std::endl;
+        exit(1);
+    }
     threads[0] = main;
     current_thread = 0;
     quantum_counter++;
+
+
+    struct sigaction sa = {};
+
+    // Install timer_handler as the signal handler for SIGVTALRM.
+    sa.sa_handler = &timer_handler;
+    if (sigaction(SIGVTALRM, &sa, NULL) < 0)
+    {
+        std::cerr << "system error: " << "timer set error" << std::endl;
+        exit(1);
+    }
+
+    reset_timer(quantum_usecs);
+
+    unblock_timer_signal();
+
     return 0;
 
 }
@@ -168,23 +245,45 @@ int uthread_init(int quantum_usecs) {
  * @return On success, return the ID of the created thread. On failure, return -1.
 */
 int uthread_spawn(thread_entry_point entry_point) {
+
+    block_timer_signal();
+
     if (entry_point == nullptr) {
         std::cerr << "thread library error: " << "entry_point can't be NULL" << std::endl;
+        unblock_timer_signal();
+        return -1;
     }
     for (int i = 0; i < MAX_THREAD_NUM; i++) {
         if (threads[i] == nullptr) {
-            char* stack = new char[STACK_SIZE];
-            threads[i] = new thread{READY, 0, stack,entry_point};
+
+            // allocate memory for stack,thread
+            char* stack = new (nothrow) char[STACK_SIZE];
+            if (stack == nullptr) {
+                std::cerr << "system error: " << "allocation failed" << std::endl;
+                exit(1);
+            }
+            threads[i] = new (nothrow) thread{READY, 0, stack,entry_point};
+            if (threads[i] == nullptr) {
+                std::cerr << "system error: " << "allocation failed" << std::endl;
+                exit(1);
+            }
+
+            // sigsetjmp also saves timer block
+            unblock_timer_signal();
             sigsetjmp(threads[i]->env, 1);
+            block_timer_signal();
+
             address_t sp = (address_t)stack + STACK_SIZE - sizeof(address_t);
             address_t pc = (address_t)entry_point;
             (threads[i]->env->__jmpbuf)[JB_SP] = translate_address(sp);
             (threads[i]->env->__jmpbuf)[JB_PC] = translate_address(pc);
             ready_queue.push(i);
+            unblock_timer_signal();
             return i;
         }
     }
     // std::cerr << "thread library error: " << "Over 100 threads" << std::endl;
+    unblock_timer_signal();
     return -1;
 }
 
@@ -200,6 +299,9 @@ int uthread_spawn(thread_entry_point entry_point) {
  * itself or the main thread is terminated, the function does not return.
 */
 int uthread_terminate(int tid){
+
+    block_timer_signal();
+
     if (tid == 0) {
         for (auto& thread : threads) {
             if (thread != nullptr) {
@@ -211,10 +313,12 @@ int uthread_terminate(int tid){
     }
     if (tid < 0 || tid >= MAX_THREAD_NUM) {
         std::cerr << "thread library error: " << "tid must be positive" << std::endl;
+        unblock_timer_signal();
         return -1;
     }
     if (threads[tid] == nullptr) {
         std::cerr << "thread library error: " << "tid " << tid << " is not exist" << std::endl;
+        unblock_timer_signal();
         return -1;
     }
 
@@ -223,9 +327,10 @@ int uthread_terminate(int tid){
     threads[tid] = nullptr;
 
     if (current_thread == tid) {
+        unblock_timer_signal();
         context_switch();
     }
-
+    unblock_timer_signal();
     return 0;
 }
 
@@ -240,6 +345,8 @@ int uthread_terminate(int tid){
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_block(int tid) {
+    block_timer_signal();
+
     if (tid <= 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
         std::cerr << "thread library error: Invalid tid in uthread_block\n" << std::endl;
         return -1;
@@ -247,6 +354,7 @@ int uthread_block(int tid) {
 
     thread *t = threads[tid];
     if (t->is_actively_blocked) {
+        unblock_timer_signal();
         return 0;
     }
 
@@ -254,10 +362,11 @@ int uthread_block(int tid) {
     t->is_actively_blocked = true;
 
     if (tid == current_thread) {
+        unblock_timer_signal();
         context_switch();
     }
 
-
+    unblock_timer_signal();
     return 0;
 }
 
@@ -272,13 +381,19 @@ int uthread_block(int tid) {
  *
  * @return On success, return 0. On failure, return -1.
 */
+
 int uthread_resume(int tid) {
+
+    block_timer_signal();
+
     if (tid < 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
         std::cerr << "thread library error: Invalid tid in uthread_resume\n" << std::endl;
+        unblock_timer_signal();
         return -1;
     }
     thread *t = threads[tid];
     if (t->state == RUNNING || t->state == READY) {
+        unblock_timer_signal();
         return 0;
     }
     t->is_actively_blocked = false;
@@ -287,6 +402,7 @@ int uthread_resume(int tid) {
         ready_queue.push(tid);
     }
 
+    unblock_timer_signal();
     return 0;
 }
 
@@ -308,19 +424,25 @@ int uthread_resume(int tid) {
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_sleep(int num_quantums) {
+    block_timer_signal();
+
     if (current_thread == 0 && num_quantums != 0) {
         std::cerr << "thread library error: " << "main thread can't sleep" << std::endl;
+        unblock_timer_signal();
         return -1;
     }
     if (num_quantums == 0) {
         threads[current_thread]->state = READY;
         ready_queue.push(current_thread);
         context_switch();
+        unblock_timer_signal();
         return 0;
     }
     threads[current_thread]->state = BLOCKED;
     threads[current_thread]->quantum_sleep = num_quantums+1;
     context_switch();
+
+    unblock_timer_signal();
     return 0;
 }
 
