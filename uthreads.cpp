@@ -74,6 +74,7 @@ typedef struct {
     char* stack;
     void (*func)(void);
     sigjmp_buf env;
+    bool is_actively_blocked = false;
 } thread;
 
 thread* threads[MAX_THREAD_NUM] = {nullptr};
@@ -265,8 +266,10 @@ int uthread_sleep(int num_quantums) {
         context_switch();
         return 0;
     }
-
-    return -1;
+    threads[current_thread]->state = BLOCKED;
+    threads[current_thread]->quantum = num_quantums;
+    context_switch();
+    return 0;
 }
 
 
