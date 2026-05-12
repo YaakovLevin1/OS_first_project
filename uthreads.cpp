@@ -68,14 +68,16 @@ enum State {
     READY,
     BLOCKED
 };
-typedef struct {
+
+struct thread{
     State state;
     int quantum;
     char* stack;
     void (*func)(void);
     sigjmp_buf env;
     bool is_actively_blocked = false;
-} thread;
+    int quantum_sleep = 0;
+};
 
 thread* threads[MAX_THREAD_NUM] = {nullptr};
 queue<int> ready_queue;
@@ -84,23 +86,40 @@ int quantum_counter = 0;
 int g_quantom_usecs = 0;
 
 int context_switch() {
+    // save current state
     if (threads[current_thread] != nullptr) {
         int result = sigsetjmp(threads[current_thread]->env,1);
         if (result != 0) {
             return 0;
         }
     }
+
     if (ready_queue.empty()) {
         return -1;
     }
+
+    // update quantom-sleep for blocked threads
+    for (int i = 0; i < MAX_THREAD_NUM; i++)  {
+        if (threads[i] != nullptr && threads[i]->quantum_sleep > 0) {
+            threads[i]->quantum_sleep--;
+            if (threads[i]->quantum_sleep == 0) {
+                ready_queue.push(i);
+                threads[i]->state = READY;
+            }
+        }
+
+    }
+
+    // search for ready thread
     int next_thread = ready_queue.front();
-    while (threads[next_thread] == nullptr) {
+    while (threads[next_thread] == nullptr || threads[next_thread]->state != READY) {
         ready_queue.pop();
         if (ready_queue.empty()) {
             return -1;
         }
         next_thread = ready_queue.front();
     }
+
     ready_queue.pop();
     current_thread = next_thread;
     threads[current_thread]->state = RUNNING;
@@ -267,7 +286,7 @@ int uthread_sleep(int num_quantums) {
         return 0;
     }
     threads[current_thread]->state = BLOCKED;
-    threads[current_thread]->quantum = num_quantums;
+    threads[current_thread]->quantum_sleep = num_quantums+1;
     context_switch();
     return 0;
 }
