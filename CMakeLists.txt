@@ -10,4 +10,8 @@ include_directories(.)
 add_executable(program
         uthreads.cpp
         tests/test_2_thread_id_management.cpp
+        ../../../../../../wsl.localhost/Ubuntu/home/tlp/projects/OS_first_project/tests/test_3_5.cpp
+        ../../../../../../wsl.localhost/Ubuntu/home/tlp/projects/OS_first_project/tests/test_3_5.h
+        ../../../../../../wsl.localhost/Ubuntu/home/tlp/projects/OS_first_project/tests/test_4.cpp
+        ../../../../../../wsl.localhost/Ubuntu/home/tlp/projects/OS_first_project/tests/test_4.h
 )

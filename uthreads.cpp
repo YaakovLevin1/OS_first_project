@@ -157,8 +157,24 @@ int uthread_terminate(int tid){
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_block(int tid) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    if (tid <= 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
+        std::cerr << "thread library error: Invalid tid in unthread_block\n" << std::endl;
+        return -1;
+    }
+
+    thread *t = threads[tid];
+    if (t->state == BLOCKED ) {
+        return 0;
+    }
+
+    t->state = BLOCKED;
+
+    if (tid == current_thread) {
+        context_switch();
+    }
+
+
+    return 0;
 }
 
 
@@ -172,8 +188,19 @@ int uthread_block(int tid) {
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_resume(int tid) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    if (tid < 0 || tid >= MAX_THREAD_NUM || threads[tid] == nullptr) {
+        std::cerr << "thread library error: Invalid tid in unthread_resume\n" << std::endl;
+        return -1;
+    }
+    thread *t = threads[tid];
+    if (t->state == RUNNING || t->state == READY) {
+        return 0;
+    }
+    t->state = READY;
+    ready_queue.push(tid);
+
+
+    return 0;
 }
 
 

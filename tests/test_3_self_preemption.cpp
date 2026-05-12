@@ -32,6 +32,14 @@ void print_and_yield() {
     }
 }
 
+/**
+ * This function implements the test in section 3.5
+ *
+ */
+void terminate_thread_35() {
+
+}
+
 int main(int argc, char **argv) {
     int result;
     result = uthread_init(std::numeric_limits<int>::max());
