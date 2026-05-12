@@ -1,9 +1,10 @@
 #include "uthreads.h"
 #include <iostream>
 #include <queue>
+#include <setjmp.h>
 #include <unistd.h>
 #include <signal.h>
-#include <map>
+
 
 #define MAX_THREAD_NUM 100
 #define STACK_SIZE 4096
@@ -18,14 +19,25 @@ enum State {
 typedef struct {
     int TID;
     State state;
-    int quantom;
-    char* stack;
+    int quantum;
+    sigjmp_buf env;
     void (*func)(void);
 } thread;
 
 thread* threads[MAX_THREAD_NUM] = {nullptr};
-queue<int> threads_queue;
+queue<int> ready_queue;
 int current_thread = -1;
+int quantum_counter = 0;
+
+int context_switch() {
+    int next_thread = ready_queue.front();
+    ready_queue.pop();
+    current_thread = next_thread;
+    threads[current_thread]->state = RUNNING;
+    threads[current_thread]->quantum++;
+    quantum_counter++;
+    return next_thread;
+}
 
 /**
  * @brief initializes the thread library.
@@ -47,6 +59,7 @@ int uthread_init(int quantum_usecs) {
     thread* main = new thread{0, RUNNING, quantum_usecs, nullptr};
     threads[0] = main;
     current_thread = 0;
+    quantum_counter++;
     return 0;
 
 }
@@ -70,7 +83,8 @@ int uthread_spawn(thread_entry_point entry_point) {
     for (int i = 0; i < MAX_THREAD_NUM; i++) {
         if (threads[i] == nullptr) {
             char* stack = new char[STACK_SIZE];
-            threads[i] = new thread{i, READY, 1, stack,entry_point};
+            threads[i] = new thread{i, READY, 0, stack,entry_point};
+            ready_queue.push(i);
             return i;
         }
     }
@@ -165,7 +179,14 @@ int uthread_resume(int tid) {
  * @return On success, return 0. On failure, return -1.
 */
 int uthread_sleep(int num_quantums) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
+    if (current_thread == 0 && num_quantums != 0) {
+        std::cerr << "thread library error: " << "main thread can't sleep" << std::endl;
+    }
+    if (num_quantums == 0) {
+        threads[current_thread]->state = READY;
+        context_switch();
+    }
+
     return -1;
 }
 
@@ -189,8 +210,7 @@ int uthread_get_tid() {
  * @return The total number of quantums.
 */
 int uthread_get_total_quantums() {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    return quantum_counter;
 }
 
 
@@ -204,6 +224,13 @@ int uthread_get_total_quantums() {
  * @return On success, return the number of quantums of the thread with ID tid. On failure, return -1.
 */
 int uthread_get_quantums(int tid) {
-    std::cerr << "thread library error: " << "did not implement" << std::endl;
-    return -1;
+    if (tid < 0 || tid >= MAX_THREAD_NUM) {
+        std::cerr << "thread library error: " << "tid must be positive" << std::endl;
+        return -1;
+    }
+    if (threads[tid] == nullptr) {
+        std::cerr << "thread library error: " << "tid " << tid << " is not exist" << std::endl;
+        return -1;
+    }
+    return threads[tid]->quantum;
 }
