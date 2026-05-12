@@ -30,6 +30,7 @@ int current_thread = -1;
 int quantum_counter = 0;
 
 int context_switch() {
+    if (sigsetjmp(threads[]))
     int next_thread = ready_queue.front();
     ready_queue.pop();
     current_thread = next_thread;
